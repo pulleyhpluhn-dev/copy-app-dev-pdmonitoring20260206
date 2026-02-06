@@ -1,0 +1,5 @@
+{
+  "name": "Copy of APP for 500kV GIS PD Diagnosis System 20260206",
+  "description": "增加了项目层级的统计，增加了传感器的参数/阈值设置，修改了传感器原始数据下载入口",
+  "requestFramePermissions": []
+}
