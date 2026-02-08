@@ -116,11 +116,31 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const getStatusConfig = (status: AlarmLevel) => {
     switch (status) {
-      case AlarmLevel.CRITICAL: return { color: 'text-red-500', bg: 'bg-red-500', border: 'border-red-500', icon: AlertOctagon, label: '三级' };
-      case AlarmLevel.DANGER: return { color: 'text-orange-500', bg: 'bg-orange-500', border: 'border-orange-500', icon: AlertTriangle, label: '二级' };
-      case AlarmLevel.WARNING: return { color: 'text-yellow-500', bg: 'bg-yellow-500', border: 'border-yellow-500', icon: LayoutGrid, label: '一级' };
-      case AlarmLevel.NO_DATA: return { color: 'text-slate-400', bg: 'bg-slate-400', border: 'border-slate-400', icon: HelpCircle, label: '无数据' };
-      default: return { color: 'text-green-500', bg: 'bg-green-500', border: 'border-green-500', icon: CheckCircle2, label: '正常' };
+      case AlarmLevel.CRITICAL: return { 
+          className: 'bg-red-500 text-white border-red-600 shadow-md shadow-red-500/20', 
+          icon: AlertOctagon, 
+          label: '三级报警' 
+      };
+      case AlarmLevel.DANGER: return { 
+          className: 'bg-orange-500 text-white border-orange-600 shadow-md shadow-orange-500/20', 
+          icon: AlertOctagon, 
+          label: '二级报警' 
+      };
+      case AlarmLevel.WARNING: return { 
+          className: 'bg-yellow-400 text-yellow-900 border-yellow-500 shadow-md shadow-yellow-500/20', 
+          icon: AlertOctagon, 
+          label: '一级报警' 
+      };
+      case AlarmLevel.NO_DATA: return { 
+          className: 'bg-slate-100 text-slate-500 border-slate-200', 
+          icon: HelpCircle, 
+          label: '暂无数据' 
+      };
+      default: return { 
+          className: 'bg-green-500 text-white border-green-600 shadow-md shadow-green-500/20', 
+          icon: CheckCircle2, 
+          label: '正常运行' 
+      };
     }
   };
 
@@ -317,11 +337,11 @@ const Dashboard: React.FC<DashboardProps> = ({
                                     <div className="text-xs opacity-50 mt-0.5 truncate">{device.station}</div>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <span className={`text-[10px] px-2 py-0.5 rounded font-black border bg-opacity-5 border-opacity-20 ${statusConfig.color} ${statusConfig.border}`}>
-                                    {statusConfig.label}
-                                </span>
-                                {/* <ArrowUpRight size={16} className="opacity-30" /> */}
+                            
+                            {/* Prominent Status Badge */}
+                            <div className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold border ${statusConfig.className}`}>
+                                {React.createElement(statusConfig.icon, { size: 14, strokeWidth: 2.5 })}
+                                <span>{statusConfig.label}</span>
                             </div>
                           </div>
                           
