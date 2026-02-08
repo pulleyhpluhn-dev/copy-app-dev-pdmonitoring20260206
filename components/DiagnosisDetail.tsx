@@ -2,11 +2,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
-  LineChart, Line, ComposedChart, Area, ReferenceLine, ZAxis
+  ReferenceLine, ZAxis
 } from 'recharts';
 import { 
-  ArrowLeft, Activity, Zap, Waves, AlertCircle, Maximize2, Rotate3d, Sparkles, SlidersHorizontal, MousePointer2, Loader2,
-  CheckCircle2, AlertTriangle, AlertOctagon, AudioWaveform
+  ArrowLeft, Activity, Zap, Waves, Maximize2, Rotate3d, Loader2, AudioWaveform, Thermometer, Droplets
 } from 'lucide-react';
 import { ChartDataPoint } from '../types';
 
@@ -20,7 +19,7 @@ interface DiagnosisDetailProps {
 
 type ChannelType = 'UHF' | 'TEV' | 'AE' | 'HFCT';
 
-// --- Mock Data Generators (Same as before) ---
+// --- Mock Data Generators ---
 const generatePRPDData = (seed: number, channel: ChannelType) => {
   const data = [];
   const intensity = channel === 'UHF' ? 1.5 : (channel === 'TEV' ? 1.0 : 0.8);
@@ -37,30 +36,6 @@ const generatePRPDData = (seed: number, channel: ChannelType) => {
   }
   for (let i = 0; i < 50; i++) {
     data.push({ phase: Math.random() * 360, amplitude: Math.random() * 10 + noise, count: 1 });
-  }
-  return data;
-};
-
-const generatePulseData = (channel: ChannelType) => {
-  const data = [];
-  const decay = channel === 'UHF' ? 0.2 : 0.05;
-  const freq = channel === 'UHF' ? 0.8 : 0.3;
-  for (let t = 0; t < 200; t++) {
-    const val = 100 * Math.exp(-decay * t) * Math.sin(freq * t);
-    data.push({ time: t, value: val + (Math.random() - 0.5) * 5 });
-  }
-  return data;
-};
-
-const generateCorrelationData = (channel: ChannelType) => {
-  const data = [];
-  for (let i = 0; i <= 360; i += 5) {
-    const sine = 50 * Math.sin((i * Math.PI) / 180);
-    let discharge = null;
-    if ((i > 60 && i < 120) || (i > 240 && i < 300)) {
-       if (Math.random() > 0.7) discharge = Math.abs(sine) * (0.5 + Math.random() * 0.5) * (channel === 'UHF' ? 1.2 : 0.8);
-    }
-    data.push({ phase: i, voltage: sine, discharge });
   }
   return data;
 };
@@ -93,17 +68,18 @@ const PRPS3DView: React.FC<{ isDark: boolean, channel: ChannelType }> = ({ isDar
 const DiagnosisDetail: React.FC<DiagnosisDetailProps> = ({ isDark, dataPoint, sensorName, sensorSn, onBack }) => {
   const [activeChannel, setActiveChannel] = useState<ChannelType>('TEV');
   const [prpdData, setPrpdData] = useState<any[]>([]);
-  const [pulseData, setPulseData] = useState<any[]>([]);
-  const [corrData, setCorrData] = useState<any[]>([]);
 
   useEffect(() => {
     setPrpdData(generatePRPDData(Date.now(), activeChannel));
-    setPulseData(generatePulseData(activeChannel));
-    setCorrData(generateCorrelationData(activeChannel));
   }, [activeChannel, dataPoint]);
 
   // Handle null dataPoint gracefully to avoid white screen
-  const safeDataPoint = dataPoint || { time: new Date().toISOString(), isAlarm: false };
+  const safeDataPoint = (dataPoint || { 
+      time: new Date().toISOString(), 
+      isAlarm: false,
+      temperature: 25.0,
+      humidity: 50.0
+  }) as ChartDataPoint;
 
   const cardClass = `rounded-2xl border flex flex-col overflow-hidden relative transition-colors duration-300 ${isDark ? 'bg-[#151e32] border-slate-700 shadow-xl' : 'bg-white border-gray-200 shadow-md'}`;
   const titleClass = `px-4 py-3 border-b flex justify-between items-center text-xs font-bold uppercase tracking-widest ${isDark ? 'border-slate-700 bg-slate-800/50 text-slate-300' : 'border-gray-100 bg-gray-50/50 text-slate-600'}`;
@@ -112,6 +88,10 @@ const DiagnosisDetail: React.FC<DiagnosisDetailProps> = ({ isDark, dataPoint, se
   const maxAmp = prpdData.length > 0 ? Math.max(...prpdData.map(d => d.amplitude)).toFixed(1) : '0.0';
   const minAmp = prpdData.length > 0 ? Math.min(...prpdData.map(d => d.amplitude)).toFixed(1) : '0.0';
   const avgAmp = prpdData.length > 0 ? (prpdData.reduce((a, b) => a + b.amplitude, 0) / prpdData.length).toFixed(1) : '0.0';
+
+  // Temp & Humidity display strings
+  const tempVal = safeDataPoint.temperature?.toFixed(1) ?? '--';
+  const humVal = safeDataPoint.humidity?.toFixed(0) ?? '--';
 
   if (!dataPoint) {
       // Show loading state if just transitioned
@@ -149,8 +129,8 @@ const DiagnosisDetail: React.FC<DiagnosisDetailProps> = ({ isDark, dataPoint, se
 
       {/* 2. Compact Channel Selection (Icon + Small Text) */}
       <div className={`px-4 py-2 border-b flex-shrink-0 ${isDark ? 'bg-[#0b1120] border-slate-800' : 'bg-gray-50/50 border-gray-100'}`}>
-          <div className="grid grid-cols-4 gap-2">
-             {(['UHF', 'TEV', 'AE', 'HFCT'] as ChannelType[]).map(ch => {
+          <div className="grid grid-cols-3 gap-2">
+             {(['UHF', 'TEV', 'AE'] as ChannelType[]).map(ch => {
                  const isActive = activeChannel === ch;
                  let Icon = Activity;
                  if (ch === 'UHF') Icon = Waves;
@@ -187,11 +167,11 @@ const DiagnosisDetail: React.FC<DiagnosisDetailProps> = ({ isDark, dataPoint, se
 
       {/* 3. Stats Row */}
       <div className={`px-4 py-2 border-b flex items-center justify-center gap-4 text-xs flex-shrink-0 ${isDark ? 'bg-[#0b1120] border-slate-800 text-slate-400' : 'bg-slate-50 border-gray-100 text-slate-500'}`}>
-           <div className="flex items-center gap-1">最大值: <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>{maxAmp}</span></div>
+           <div className="flex items-center gap-1">Max: <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>{maxAmp}</span></div>
            <div className={`w-px h-3 ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`}></div>
-           <div className="flex items-center gap-1">平均值: <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>{avgAmp}</span></div>
+           <div className="flex items-center gap-1">Avg: <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>{avgAmp}</span></div>
            <div className={`w-px h-3 ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`}></div>
-           <div className="flex items-center gap-1">最小值: <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>{minAmp}</span></div>
+           <div className="flex items-center gap-1">Min: <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>{minAmp}</span></div>
            <div className={`w-px h-3 ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`}></div>
            <div className="opacity-50">单位：dBmV</div>
       </div>
@@ -203,9 +183,12 @@ const DiagnosisDetail: React.FC<DiagnosisDetailProps> = ({ isDark, dataPoint, se
               {/* 1. PRPD Pattern */}
               <div className={cardClass}>
                   <div className={titleClass}>
-                      <div className="flex items-center gap-2"><Activity size={14} className="text-blue-500"/> PRPD 相位分布图</div>
-                      <div className="flex gap-2">
-                          <Maximize2 size={14} className="opacity-40 cursor-pointer hover:opacity-100" />
+                      <div className="flex items-center gap-2"><Activity size={14} className="text-blue-500"/> PRPD 二位图谱分析</div>
+                      <div className="flex items-center gap-3">
+                          <div className={`flex items-center gap-2 text-[10px] font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                              <div className="flex items-center gap-1"><Thermometer size={10} /> {tempVal}°C</div>
+                              <div className="flex items-center gap-1"><Droplets size={10} /> {humVal}%</div>
+                          </div>
                       </div>
                   </div>
                   <div className="flex-1 min-h-[300px] p-2 relative">
@@ -228,47 +211,13 @@ const DiagnosisDetail: React.FC<DiagnosisDetailProps> = ({ isDark, dataPoint, se
               <div className={cardClass}>
                   <div className={titleClass}>
                       <div className="flex items-center gap-2"><Rotate3d size={14} className="text-purple-500"/> PRPS 三维图谱分析</div>
+                      <div className={`flex items-center gap-2 text-[10px] font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                          <div className="flex items-center gap-1"><Thermometer size={10} /> {tempVal}°C</div>
+                          <div className="flex items-center gap-1"><Droplets size={10} /> {humVal}%</div>
+                      </div>
                   </div>
                   <div className="flex-1 min-h-[300px]">
                       <PRPS3DView isDark={isDark} channel={activeChannel} />
-                  </div>
-              </div>
-
-              {/* 3. Pulse Waveform */}
-              <div className={cardClass}>
-                  <div className={titleClass}>
-                      <div className="flex items-center gap-2"><Zap size={14} className="text-yellow-500"/> 放电脉冲波形分析</div>
-                  </div>
-                  <div className="flex-1 min-h-[250px] p-2">
-                      <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={pulseData} margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
-                              <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#333' : '#e5e7eb'} />
-                              <XAxis dataKey="time" type="number" domain={[0, 200]} tick={{fontSize: 10}} label={{ value: 'Time (ns)', position: 'insideBottomRight', offset: -5, fontSize: 10 }} />
-                              <YAxis tick={{fontSize: 10}} label={{ value: 'mV', position: 'insideLeft', angle: -90, offset: 10, fontSize: 10 }} />
-                              <RechartsTooltip contentStyle={{ backgroundColor: isDark ? '#000' : '#fff' }} />
-                              <Line type="monotone" dataKey="value" stroke="#eab308" strokeWidth={2} dot={false} animationDuration={500} />
-                          </LineChart>
-                      </ResponsiveContainer>
-                  </div>
-              </div>
-
-              {/* 4. Power Frequency Correlation */}
-              <div className={cardClass}>
-                  <div className={titleClass}>
-                      <div className="flex items-center gap-2"><Waves size={14} className="text-cyan-500"/> 相位相关性分析</div>
-                  </div>
-                  <div className="flex-1 min-h-[250px] p-2">
-                      <ResponsiveContainer width="100%" height="100%">
-                          <ComposedChart data={corrData} margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
-                              <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#333' : '#e5e7eb'} />
-                              <XAxis dataKey="phase" unit="°" type="number" domain={[0, 360]} tick={{fontSize: 10}} />
-                              <YAxis yAxisId="left" orientation="left" stroke={isDark ? '#888' : '#666'} tick={{fontSize: 10}} label={{ value: 'kV', angle: -90, position: 'insideLeft', fontSize: 10 }} />
-                              <YAxis yAxisId="right" orientation="right" stroke="#0ea5e9" tick={{fontSize: 10}} label={{ value: 'dBmV', angle: 90, position: 'insideRight', fontSize: 10 }} />
-                              <RechartsTooltip contentStyle={{ backgroundColor: isDark ? '#000' : '#fff' }} />
-                              <Line yAxisId="left" type="basis" dataKey="voltage" stroke={isDark ? '#64748b' : '#94a3b8'} strokeWidth={1} dot={false} name="工频电压" />
-                              <Scatter yAxisId="right" dataKey="discharge" fill="#0ea5e9" name="放电点" />
-                          </ComposedChart>
-                      </ResponsiveContainer>
                   </div>
               </div>
 

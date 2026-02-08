@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts';
 import { ChartDataPoint, AlarmLevel, SensorData } from '../types';
 import { 
-  Thermometer, Zap, Activity, ArrowLeft, CheckCircle2, AlertTriangle, AlertOctagon, HelpCircle, Calendar, ChevronDown, Waves, Droplets, AudioWaveform, Layers, Radio
+  Thermometer, Zap, Activity, ArrowLeft, Calendar, Layers, Radio, Check, BarChart2, Waves
 } from 'lucide-react';
 
 interface TrendAnalysisProps {
@@ -25,14 +25,34 @@ interface TrendAnalysisProps {
   sensors?: SensorData[];
 }
 
-type TimeRange = '24h' | '7d' | '1m' | 'custom';
+type TimeRange = '24h' | '7d' | '3m' | '6m';
 type TabType = 'electrical' | 'environmental';
 
 const generateData = (range: TimeRange): ChartDataPoint[] => {
-  const points = range === '24h' ? 24 : (range === '7d' ? 7 : 30); 
+  let points = 24;
+  let interval = 3600 * 1000; // default 1h
+
+  switch (range) {
+      case '24h':
+          points = 24;
+          interval = 3600 * 1000;
+          break;
+      case '7d':
+          points = 28; // 4 points per day approx
+          interval = 6 * 3600 * 1000;
+          break;
+      case '3m':
+          points = 90; // Daily
+          interval = 24 * 3600 * 1000;
+          break;
+      case '6m':
+          points = 90; // Every 2 days approx
+          interval = 48 * 3600 * 1000;
+          break;
+  }
+
   const data: ChartDataPoint[] = [];
   const now = new Date();
-  const interval = range === '24h' ? 3600 * 1000 : 24 * 3600 * 1000;
 
   for (let i = 0; i < points; i++) {
       const time = new Date(now.getTime() - (points - i) * interval);
@@ -48,7 +68,7 @@ const generateData = (range: TimeRange): ChartDataPoint[] => {
           ae_freq: Math.random() * 20,
           temperature: 25 + Math.random() * 5,
           humidity: 60 + Math.random() * 10,
-          isAlarm: Math.random() > 0.9 // Random alarm for demo
+          isAlarm: Math.random() > 0.95 // Random alarm for demo
       });
   }
   return data;
@@ -70,12 +90,27 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
     uhfValue = 0, tevValue = 0, tempValue = 0, humidityValue = 0,
     onChartClick, sensors = []
 }) => {
-  const [timeRange, setTimeRange] = useState<TimeRange>('24h');
+  const [timeRange, setTimeRange] = useState<TimeRange>('3m');
   const [activeTab, setActiveTab] = useState<TabType>('electrical');
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
-  const [customStartDate, setCustomStartDate] = useState('');
-  const [customEndDate, setCustomEndDate] = useState('');
   const [selectedSensorId, setSelectedSensorId] = useState<string | null>(null);
+
+  // Single select channel
+  const [selectedChannel, setSelectedChannel] = useState<string>('UHF');
+
+  // Channel Configuration
+  const CHANNEL_CONFIG: Record<string, { label: string, color: string, bg: string }> = {
+      UHF: { label: 'UHF', color: '#60a5fa', bg: 'bg-blue-500' },    // Blue
+      TEV: { label: 'TEV', color: '#c084fc', bg: 'bg-purple-500' },  // Purple
+      AE:  { label: 'AE',  color: '#818cf8', bg: 'bg-indigo-500' },  // Indigo
+  };
+
+  // Threshold Configuration
+  const THRESHOLDS: Record<string, { amp: { l1: number, l2: number, l3: number }, freq: { l1: number, l2: number, l3: number } }> = {
+      UHF: { amp: { l1: 35, l2: 45, l3: 55 }, freq: { l1: 50, l2: 75, l3: 90 } },
+      TEV: { amp: { l1: 20, l2: 30, l3: 38 }, freq: { l1: 50, l2: 75, l3: 90 } },
+      AE:  { amp: { l1: 10, l2: 15, l3: 20 }, freq: { l1: 10, l2: 15, l3: 18 } },
+  };
 
   // Sort sensors by status severity: Critical > Danger > Warning > Normal > No Data
   const sortedSensors = useMemo(() => {
@@ -96,7 +131,7 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
       }
   }, [sortedSensors, selectedSensorId]);
 
-  // Generate data when TimeRange OR SelectedSensor changes (Simulation of refresh)
+  // Generate data when TimeRange changes
   useEffect(() => {
     setChartData(generateData(timeRange));
   }, [timeRange, selectedSensorId]);
@@ -108,22 +143,60 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
       const currentSensor = sensors.find(s => s.id === selectedSensorId);
       const info = currentSensor ? { name: currentSensor.name, sn: currentSensor.sn } : undefined;
 
-      // Case 1: Click from AreaChart wrapper (provides state with activePayload)
       if (data && data.activePayload && data.activePayload.length > 0) {
           onChartClick(data.activePayload[0].payload as ChartDataPoint, info);
           return;
       }
-      
-      // Case 2: Click directly on a dot (payload is passed directly)
       if (data && data.payload && (data.payload.uhf_amp !== undefined || data.payload.time !== undefined)) {
-           // It's a payload object directly
            onChartClick(data.payload as ChartDataPoint, info);
            return;
       }
-
-      // Case 3: Fallback for some Recharts versions where payload is data directly
       if (data && (data.uhf_amp !== undefined || data.time !== undefined)) {
           onChartClick(data as ChartDataPoint, info);
+      }
+  };
+
+  const currentChannelConfig = CHANNEL_CONFIG[selectedChannel] || CHANNEL_CONFIG.UHF;
+  const currentThresholds = THRESHOLDS[selectedChannel] || THRESHOLDS.UHF;
+  
+  const currentSensorStatus = useMemo(() => {
+      return sensors.find(s => s.type === selectedChannel)?.status || AlarmLevel.NORMAL;
+  }, [sensors, selectedChannel]);
+
+  const visibleLevels = useMemo(() => {
+      if (currentSensorStatus === AlarmLevel.CRITICAL) return ['l3'];
+      if (currentSensorStatus === AlarmLevel.DANGER) return ['l2', 'l3'];
+      return ['l1', 'l2', 'l3'];
+  }, [currentSensorStatus]);
+
+  // Custom Dot Renderer to show Alarm Levels
+  const renderCustomDot = (props: any, isFreq: boolean) => {
+      const { cx, cy, payload } = props;
+      
+      // Handler for direct dot click
+      const handleDotClick = (e: any) => {
+          e.stopPropagation();
+          handleChartClick({ payload });
+      };
+
+      // Default Dot (No color coding for alarms as per request)
+      return (
+          <circle 
+            cx={cx} cy={cy} r={3} fill={isDark ? '#111' : '#fff'} 
+            stroke={currentChannelConfig.color} strokeWidth={1.5}
+            onClick={handleDotClick}
+            style={{ cursor: 'pointer' }}
+          />
+      );
+  };
+
+  const getStatusConfig = (status: AlarmLevel) => {
+      switch (status) {
+          case AlarmLevel.CRITICAL: return { label: '三级', color: 'text-red-500', bg: 'bg-red-500' };
+          case AlarmLevel.DANGER: return { label: '二级', color: 'text-orange-500', bg: 'bg-orange-500' };
+          case AlarmLevel.WARNING: return { label: '一级', color: 'text-yellow-500', bg: 'bg-yellow-500' };
+          case AlarmLevel.NORMAL: return { label: '正常', color: 'text-green-500', bg: 'bg-green-500' };
+          default: return { label: '无数据', color: 'text-slate-400', bg: 'bg-slate-300' };
       }
   };
 
@@ -168,143 +241,123 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
 
                  {/* Time Range */}
                  <div className={`flex p-0.5 rounded-lg border ${isDark ? 'bg-[#151515] border-white/10' : 'bg-gray-50 border-gray-200'}`}>
-                      {['24h', '7d', 'custom'].map(t => (
+                      {['6m', '3m', '7d', '24h'].map(t => (
                           <button 
                              key={t}
                              onClick={() => setTimeRange(t as TimeRange)}
                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all flex items-center gap-1 ${timeRange === t ? (isDark ? 'bg-slate-700 text-white' : 'bg-white text-slate-800 shadow-sm') : 'opacity-50 hover:opacity-100'}`}
                           >
-                              {t === 'custom' ? '自定义' : t}
-                              {t === 'custom' && <ChevronDown size={10} />}
+                              {t}
                           </button>
                       ))}
                   </div>
              </div>
-             
-             {/* Custom Date Inputs */}
-             {timeRange === 'custom' && (
-                 <div className={`flex items-center gap-2 p-2 rounded-xl border animate-fadeIn ${isDark ? 'bg-[#111] border-white/10' : 'bg-white border-gray-200'}`}>
-                     <div className="flex items-center gap-2 flex-1 relative">
-                        <Calendar size={14} className="absolute left-2 text-slate-400" />
-                        <input 
-                            type="date" 
-                            value={customStartDate}
-                            onChange={(e) => setCustomStartDate(e.target.value)}
-                            className={`w-full pl-7 pr-2 py-1.5 text-xs rounded-lg border bg-transparent outline-none ${isDark ? 'border-white/10 text-white' : 'border-gray-200 text-slate-700'}`}
-                        />
-                     </div>
-                     <span className="text-xs opacity-40">-</span>
-                     <div className="flex items-center gap-2 flex-1 relative">
-                        <Calendar size={14} className="absolute left-2 text-slate-400" />
-                        <input 
-                            type="date" 
-                            value={customEndDate}
-                            onChange={(e) => setCustomEndDate(e.target.value)}
-                            className={`w-full pl-7 pr-2 py-1.5 text-xs rounded-lg border bg-transparent outline-none ${isDark ? 'border-white/10 text-white' : 'border-gray-200 text-slate-700'}`}
-                        />
-                     </div>
-                 </div>
-             )}
           </div>
 
           {/* --- Electrical & Acoustic Charts --- */}
           {activeTab === 'electrical' && (
             <>
-                {/* Chart 1: Discharge Amplitude */}
+                {/* Channel Selector - Compact Segmented Style */}
+                <div className="px-1 mt-1 mb-2">
+                     <div className={`inline-flex p-0.5 rounded-lg border ${isDark ? 'bg-[#151515] border-white/10' : 'bg-gray-100 border-gray-200'}`}>
+                         {Object.values(CHANNEL_CONFIG).map(ch => (
+                             <button
+                                key={ch.label}
+                                onClick={(e) => { e.stopPropagation(); setSelectedChannel(ch.label); }}
+                                className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-[10px] font-bold transition-all
+                                    ${selectedChannel === ch.label
+                                        ? `${ch.bg} text-white shadow-sm` 
+                                        : `opacity-60 hover:opacity-100 ${isDark ? 'text-slate-400' : 'text-slate-600'}`
+                                    }
+                                `}
+                             >
+                                 {ch.label}
+                             </button>
+                         ))}
+                     </div>
+                </div>
+
+                {/* Chart 1: Amplitude */}
                 <div 
                     className={`p-3 rounded-2xl border shadow-sm transition-colors ${isDark ? 'bg-[#111111] border-white/10' : 'bg-white border-gray-200'} hover:border-blue-400 cursor-pointer group`}
                 >
-                    <div className="flex items-center gap-2 mb-2 pointer-events-none">
-                        <div className={`p-1 rounded-lg ${isDark ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600'}`}>
-                            <Zap size={14} />
-                        </div>
+                    <div className="flex items-center gap-2 mb-2 pointer-events-none px-1">
+                        <BarChart2 size={16} className={selectedChannel === 'AE' ? 'text-indigo-500' : (selectedChannel === 'TEV' ? 'text-purple-500' : 'text-blue-500')} fillOpacity={0.2} />
                         <span className={`font-bold text-xs ${isDark ? 'text-white' : 'text-slate-800'}`}>局放幅值趋势 (dBmV)</span>
-                        <span className="text-[9px] bg-blue-500 text-white px-2 py-0.5 rounded-full ml-auto opacity-0 group-hover:opacity-100 transition-opacity">点击详情</span>
                     </div>
-                    {/* Reduced height to h-32 (128px) to save space */}
                     <div className="h-32 w-full">
                         <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={chartData} onClick={handleChartClick}>
+                            <AreaChart data={chartData} onClick={handleChartClick} margin={{ top: 5, right: 35, left: 0, bottom: 0 }}>
                                 <defs>
-                                    <linearGradient id="colorUHF" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#38BDF8" stopOpacity={0.3}/><stop offset="95%" stopColor="#38BDF8" stopOpacity={0}/></linearGradient>
-                                    <linearGradient id="colorTEV" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#C084FC" stopOpacity={0.3}/><stop offset="95%" stopColor="#C084FC" stopOpacity={0}/></linearGradient>
+                                    <linearGradient id="colorAmp" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor={currentChannelConfig.color} stopOpacity={0.3}/>
+                                        <stop offset="95%" stopColor={currentChannelConfig.color} stopOpacity={0}/>
+                                    </linearGradient>
                                 </defs>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#333' : '#e2e8f0'} opacity={0.5} />
                                 <XAxis dataKey="time" hide />
                                 <YAxis tick={{fontSize: 9, fill: isDark ? '#666' : '#64748b'}} axisLine={false} tickLine={false} width={25} />
                                 <Tooltip cursor={{stroke: '#38BDF8', strokeWidth: 1}} contentStyle={{ backgroundColor: isDark ? '#000' : '#fff', borderColor: isDark ? '#333' : '#e2e8f0', fontSize: '12px', color: isDark ? '#f3f4f6' : '#1e293b' }} labelFormatter={() => ''} />
+                                
+                                {visibleLevels.includes('l1') && <ReferenceLine y={currentThresholds.amp.l1} stroke="#eab308" strokeDasharray="3 3" label={{ position: 'right', value: '一级', fill: '#eab308', fontSize: 10 }} />}
+                                {visibleLevels.includes('l2') && <ReferenceLine y={currentThresholds.amp.l2} stroke="#f97316" strokeDasharray="3 3" label={{ position: 'right', value: '二级', fill: '#f97316', fontSize: 10 }} />}
+                                {visibleLevels.includes('l3') && <ReferenceLine y={currentThresholds.amp.l3} stroke="#ef4444" strokeDasharray="3 3" label={{ position: 'right', value: '三级', fill: '#ef4444', fontSize: 10 }} />}
+                                
                                 <Area 
                                     type="monotone" 
-                                    dataKey="uhf_amp" 
-                                    stroke="#38BDF8" 
-                                    fill="url(#colorUHF)" 
+                                    dataKey={selectedChannel === 'UHF' ? 'uhf_amp' : (selectedChannel === 'TEV' ? 'tev_amp' : 'ae_amp')}
+                                    stroke={currentChannelConfig.color}
                                     strokeWidth={2} 
-                                    name="UHF" 
-                                    activeDot={{ r: 6, strokeWidth: 0, fill: '#38BDF8', onClick: (e: any, payload: any) => handleChartClick(payload) }} 
-                                />
-                                <Area 
-                                    type="monotone" 
-                                    dataKey="tev_amp" 
-                                    stroke="#C084FC" 
-                                    fill="url(#colorTEV)" 
-                                    strokeWidth={2} 
-                                    name="TEV" 
-                                    activeDot={{ r: 6, strokeWidth: 0, fill: '#C084FC', onClick: (e: any, payload: any) => handleChartClick(payload) }} 
+                                    fill="url(#colorAmp)"
+                                    dot={(props) => renderCustomDot(props, false)}
+                                    activeDot={{ r: 6, strokeWidth: 0, cursor: 'pointer', onClick: (_: any, p: any) => handleChartClick({ payload: p.payload }) }}
+                                    animationDuration={500}
+                                    name="幅值"
                                 />
                             </AreaChart>
                         </ResponsiveContainer>
-                    </div>
-                    <div className="flex justify-center gap-3 mt-1 pointer-events-none">
-                        <div className="flex items-center gap-1 text-[9px] font-bold opacity-70"><div className="w-1.5 h-1.5 rounded-full bg-sky-400"></div>UHF</div>
-                        <div className="flex items-center gap-1 text-[9px] font-bold opacity-70"><div className="w-1.5 h-1.5 rounded-full bg-purple-400"></div>TEV</div>
                     </div>
                 </div>
 
-                {/* Chart 2: Discharge Frequency */}
-                <div className={`p-3 rounded-2xl border shadow-sm transition-colors ${isDark ? 'bg-[#111111] border-white/10' : 'bg-white border-gray-200'} hover:border-blue-400 cursor-pointer group`}>
-                    <div className="flex items-center gap-2 mb-2 pointer-events-none">
-                        <div className={`p-1 rounded-lg ${isDark ? 'bg-indigo-500/20 text-indigo-400' : 'bg-indigo-100 text-indigo-600'}`}>
-                            <Activity size={14} />
-                        </div>
+                {/* Chart 2: Frequency */}
+                <div 
+                    className={`p-3 rounded-2xl border shadow-sm transition-colors ${isDark ? 'bg-[#111111] border-white/10' : 'bg-white border-gray-200'} hover:border-blue-400 cursor-pointer group`}
+                >
+                    <div className="flex items-center gap-2 mb-2 pointer-events-none px-1">
+                        <Waves size={16} className={selectedChannel === 'AE' ? 'text-indigo-500' : (selectedChannel === 'TEV' ? 'text-purple-500' : 'text-blue-500')} />
                         <span className={`font-bold text-xs ${isDark ? 'text-white' : 'text-slate-800'}`}>局放频次趋势 (次/秒)</span>
-                        <span className="text-[9px] bg-blue-500 text-white px-2 py-0.5 rounded-full ml-auto opacity-0 group-hover:opacity-100 transition-opacity">点击详情</span>
                     </div>
-                    {/* Reduced height to h-32 (128px) to save space */}
                     <div className="h-32 w-full">
                         <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={chartData} onClick={handleChartClick}>
+                            <AreaChart data={chartData} onClick={handleChartClick} margin={{ top: 5, right: 35, left: 0, bottom: 0 }}>
                                 <defs>
-                                    <linearGradient id="colorUHFFreq" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#38BDF8" stopOpacity={0.3}/><stop offset="95%" stopColor="#38BDF8" stopOpacity={0}/></linearGradient>
-                                    <linearGradient id="colorTEVFreq" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#C084FC" stopOpacity={0.3}/><stop offset="95%" stopColor="#C084FC" stopOpacity={0}/></linearGradient>
+                                    <linearGradient id="colorFreq" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor={currentChannelConfig.color} stopOpacity={0.3}/>
+                                        <stop offset="95%" stopColor={currentChannelConfig.color} stopOpacity={0}/>
+                                    </linearGradient>
                                 </defs>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#333' : '#e2e8f0'} opacity={0.5} />
                                 <XAxis dataKey="time" hide />
                                 <YAxis tick={{fontSize: 9, fill: isDark ? '#666' : '#64748b'}} axisLine={false} tickLine={false} width={25} />
                                 <Tooltip cursor={{stroke: '#38BDF8', strokeWidth: 1}} contentStyle={{ backgroundColor: isDark ? '#000' : '#fff', borderColor: isDark ? '#333' : '#e2e8f0', fontSize: '12px', color: isDark ? '#f3f4f6' : '#1e293b' }} labelFormatter={() => ''} />
+                                
+                                {visibleLevels.includes('l1') && <ReferenceLine y={currentThresholds.freq.l1} stroke="#eab308" strokeDasharray="3 3" label={{ position: 'right', value: '一级', fill: '#eab308', fontSize: 10 }} />}
+                                {visibleLevels.includes('l2') && <ReferenceLine y={currentThresholds.freq.l2} stroke="#f97316" strokeDasharray="3 3" label={{ position: 'right', value: '二级', fill: '#f97316', fontSize: 10 }} />}
+                                {visibleLevels.includes('l3') && <ReferenceLine y={currentThresholds.freq.l3} stroke="#ef4444" strokeDasharray="3 3" label={{ position: 'right', value: '三级', fill: '#ef4444', fontSize: 10 }} />}
+
                                 <Area 
                                     type="monotone" 
-                                    dataKey="uhf_freq" 
-                                    stroke="#38BDF8" 
-                                    fill="url(#colorUHFFreq)" 
+                                    dataKey={selectedChannel === 'UHF' ? 'uhf_freq' : (selectedChannel === 'TEV' ? 'tev_freq' : 'ae_freq')}
+                                    stroke={currentChannelConfig.color}
                                     strokeWidth={2} 
-                                    name="UHF" 
-                                    activeDot={{ r: 6, strokeWidth: 0, fill: '#38BDF8', onClick: (e: any, payload: any) => handleChartClick(payload) }}
-                                />
-                                <Area 
-                                    type="monotone" 
-                                    dataKey="tev_freq" 
-                                    stroke="#C084FC" 
-                                    fill="url(#colorTEVFreq)" 
-                                    strokeWidth={2} 
-                                    name="TEV" 
-                                    activeDot={{ r: 6, strokeWidth: 0, fill: '#C084FC', onClick: (e: any, payload: any) => handleChartClick(payload) }}
+                                    fill="url(#colorFreq)"
+                                    dot={(props) => renderCustomDot(props, true)}
+                                    activeDot={{ r: 6, strokeWidth: 0, cursor: 'pointer', onClick: (_: any, p: any) => handleChartClick({ payload: p.payload }) }}
+                                    animationDuration={500}
+                                    name="频次"
                                 />
                             </AreaChart>
                         </ResponsiveContainer>
-                    </div>
-                    <div className="flex justify-center gap-3 mt-1 pointer-events-none">
-                        <div className="flex items-center gap-1 text-[9px] font-bold opacity-70"><div className="w-1.5 h-1.5 rounded-full bg-sky-400"></div>UHF</div>
-                        <div className="flex items-center gap-1 text-[9px] font-bold opacity-70"><div className="w-1.5 h-1.5 rounded-full bg-purple-400"></div>TEV</div>
                     </div>
                 </div>
             </>
@@ -313,10 +366,8 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
           {/* --- Environmental Charts --- */}
           {activeTab === 'environmental' && (
              <div className={`p-3 rounded-2xl border shadow-sm transition-colors ${isDark ? 'bg-[#111111] border-white/10' : 'bg-white border-gray-200'}`}>
-                <div className="flex items-center gap-2 mb-2 pointer-events-none">
-                    <div className={`p-1 rounded-lg ${isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-600'}`}>
-                        <Thermometer size={14} />
-                    </div>
+                <div className="flex items-center gap-2 mb-2 pointer-events-none px-1">
+                    <Thermometer size={16} className="text-orange-500" />
                     <span className={`font-bold text-xs ${isDark ? 'text-white' : 'text-slate-800'}`}>环境温湿度趋势</span>
                 </div>
                 {/* Reduced height to h-32 for consistency */}
@@ -353,7 +404,9 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
                   {sortedSensors.length === 0 ? (
                       <div className="text-center py-6 opacity-30 text-xs">暂无关联传感器</div>
                   ) : (
-                      sortedSensors.map(sensor => (
+                      sortedSensors.map(sensor => {
+                          const statusConfig = getStatusConfig(sensor.status);
+                          return (
                           <div 
                             key={sensor.id} 
                             onClick={() => setSelectedSensorId(sensor.id)}
@@ -373,10 +426,13 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
                                   </div>
                               </div>
                               
-                              {/* Optional Status Indicator */}
-                              <div className={`w-2 h-2 rounded-full ${sensor.status === AlarmLevel.NORMAL ? 'bg-green-500' : (sensor.status === AlarmLevel.NO_DATA ? 'bg-slate-300' : 'bg-red-500')}`} />
+                              {/* Status Indicator with Text */}
+                              <div className="flex items-center gap-1.5 pl-2">
+                                  <div className={`w-2 h-2 rounded-full ${statusConfig.bg}`} />
+                                  <span className={`text-[10px] font-bold ${statusConfig.color}`}>{statusConfig.label}</span>
+                              </div>
                           </div>
-                      ))
+                      )})
                   )}
               </div>
           </div>

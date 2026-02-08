@@ -18,9 +18,9 @@ const NOW_STR = getNowStr();
 const PROJECT_IDS = ['proj-01', 'proj-02', 'proj-03'];
 
 export const MOCK_PROJECTS: Project[] = [
-  { id: 'proj-01', name: '台区1环网柜局放监测项目', type: '配电房', description: '10kV配电房在线监测系统', createdAt: NOW_STR },
-  { id: 'proj-02', name: '台区2环网柜局放监测项目', type: '配电房', description: '10kV配电房在线监测系统', createdAt: NOW_STR },
-  { id: 'proj-03', name: '台区3环网柜局放监测项目', type: '配电房', description: '10kV配电房在线监测系统', createdAt: NOW_STR }
+  { id: 'proj-01', name: '项目名称1（台区1环网柜局放监测）', type: '配电房', description: '项目说明1', createdAt: NOW_STR },
+  { id: 'proj-02', name: '项目名称2（台区2环网柜局放监测）', type: '配电房', description: '项目说明2', createdAt: NOW_STR },
+  { id: 'proj-03', name: '项目名称3（台区3环网柜局放监测）', type: '配电房', description: '项目说明3', createdAt: NOW_STR }
 ];
 
 // --- MOCK DEVICES FOR DASHBOARD ---
@@ -39,7 +39,7 @@ export const MOCK_DEVICES: DeviceSummary[] = Array.from({ length: 13 }, (_, i) =
     id: `dev-${i}`,
     projectId: PROJECT_IDS[i % 3], // Assign to one of the 3 simulated projects
     name: `环网柜间隔 ${i + 1}`,
-    station: ['台区1', '台区2', '台区3'][i % 3], // Matches the project area
+    station: `设备地点${i + 1}`, // Updated to "设备地点X"
     status: status,
     lastUpdated: NOW_STR,
     uhf_amp: Math.floor(20 + Math.random() * 20),
@@ -293,3 +293,4 @@ If a sensor is in DANGER state, interpret it as a likely insulation defect or lo
 Keep responses professional, concise, and technical but accessible to power grid operators.
 Use markdown for formatting.
 `;
+    
