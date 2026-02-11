@@ -1,11 +1,12 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
+  ComposedChart, Line, ReferenceArea
 } from 'recharts';
 import { ChartDataPoint, AlarmLevel, SensorData } from '../types';
 import { 
-  Thermometer, Zap, Activity, ArrowLeft, Calendar, Layers, Radio, Check, BarChart2, Waves
+  Thermometer, Zap, Activity, ArrowLeft, Calendar, Layers, Radio, Check, BarChart2, Waves, RotateCw, TrendingUp
 } from 'lucide-react';
 
 interface TrendAnalysisProps {
@@ -28,50 +29,158 @@ interface TrendAnalysisProps {
 type TimeRange = '24h' | '7d' | '3m' | '6m';
 type TabType = 'electrical' | 'environmental';
 
+const FREQ_COLOR = '#a855f7'; // Purple for Frequency charts
+
 const generateData = (range: TimeRange): ChartDataPoint[] => {
-  let points = 24;
+  let points = 30; // Increased points for better step visualization
   let interval = 3600 * 1000; // default 1h
 
   switch (range) {
-      case '24h':
-          points = 24;
-          interval = 3600 * 1000;
-          break;
-      case '7d':
-          points = 28; // 4 points per day approx
-          interval = 6 * 3600 * 1000;
-          break;
-      case '3m':
-          points = 90; // Daily
-          interval = 24 * 3600 * 1000;
-          break;
-      case '6m':
-          points = 90; // Every 2 days approx
-          interval = 48 * 3600 * 1000;
-          break;
+      case '24h': points = 24; interval = 3600 * 1000; break;
+      case '7d': points = 28; interval = 6 * 3600 * 1000; break;
+      case '3m': points = 90; interval = 24 * 3600 * 1000; break;
+      case '6m': points = 90; interval = 48 * 3600 * 1000; break;
   }
 
   const data: ChartDataPoint[] = [];
   const now = new Date();
 
+  // Create stepped data to simulate distinct "platforms" for detection
   for (let i = 0; i < points; i++) {
       const time = new Date(now.getTime() - (points - i) * interval);
+      
+      // Simulation Logic:
+      // 1. Base noise: 15-18 dB
+      // 2. First Step (Minor): At 40% timeline, jump +3dB
+      // 3. Second Step (Major - Inflection): At 70% timeline, jump +8dB (Total jump > 6dB from previous plateau)
+      
+      let baseAmp = 15;
+      let baseFreq = 50;
+
+      if (i > points * 0.7) {
+          // Major Jump (The Inflection)
+          baseAmp = 26; // 18 -> 26 is an 8dB jump
+          baseFreq = 120;
+      } else if (i > points * 0.4) {
+          // Minor Warmup
+          baseAmp = 18; 
+          baseFreq = 70;
+      }
+
+      // Add Random Noise (+/- 2)
+      const noise = () => (Math.random() * 4) - 2;
+
       data.push({
           time: time.toISOString(),
-          uhf_amp: Math.random() * 40 + 20,
-          tev_amp: Math.random() * 30 + 10,
+          uhf_amp: Math.max(0, baseAmp + noise() + 5), // UHF slightly higher offset
+          tev_amp: Math.max(0, baseAmp + noise()),
           hfct_amp: Math.random() * 50 + 10,
           ae_amp: Math.random() * 20 + 5,
-          uhf_freq: Math.random() * 100,
-          tev_freq: Math.random() * 100,
+          uhf_freq: Math.max(0, baseFreq + noise() * 5),
+          tev_freq: Math.max(0, baseFreq * 0.8 + noise() * 5),
           hfct_freq: Math.random() * 50,
           ae_freq: Math.random() * 20,
-          temperature: 25 + Math.random() * 5,
-          humidity: 60 + Math.random() * 10,
-          isAlarm: Math.random() > 0.95 // Random alarm for demo
+          temperature: 25 + Math.random() * 2,
+          humidity: 60 + Math.random() * 5,
+          isAlarm: baseAmp > 20 
       });
   }
   return data;
+};
+
+// --- Analysis Algorithms ---
+
+// 1. Calculate Simple Moving Average (SMA)
+const calculateSMA = (data: any[], key: string, windowSize: number) => {
+  return data.map((point, index) => {
+    if (index < windowSize - 1) return { ...point, sma: undefined };
+    const subset = data.slice(index - windowSize + 1, index + 1);
+    const sum = subset.reduce((acc, curr) => acc + (curr[key] || 0), 0);
+    return { ...point, sma: sum / windowSize };
+  });
+};
+
+// 2. Find Inflection Point (Rule: Growth > 6dB from previous platform average)
+const findInflectionPoint = (data: any[]) => {
+    const validData = data.filter(d => d.sma !== undefined);
+    if (validData.length < 5) return null;
+
+    // Use a sliding check. 
+    // We compare the current SMA with a "Baseline" established a few points back (simulating a previous platform).
+    // If current SMA - Baseline > 6, we have a trigger.
+    
+    // Initialize baseline with the first valid SMA
+    let baseline = validData[0].sma; 
+    let inflectionTime = null;
+
+    // We start checking a bit into the data to allow baseline to stabilize visually
+    for(let i = 1; i < validData.length; i++) {
+        const currentSMA = validData[i].sma;
+        
+        // Dynamic Baseline Update:
+        // If the value is relatively stable (change < 2dB), update the baseline to follow slow drifts.
+        // This ensures we catch *sudden* jumps relative to the *recent* past, not just the absolute start.
+        if (Math.abs(currentSMA - baseline) < 2) {
+            // Smoothly update baseline
+            baseline = (baseline * 0.8) + (currentSMA * 0.2);
+        }
+
+        // CHECK RULE: Growth > 6dB
+        if (currentSMA - baseline > 6) {
+            inflectionTime = validData[i].time;
+            break; // Stop at first major inflection for this demo
+        }
+    }
+    return inflectionTime;
+};
+
+// 3. Generate Forecast (Linear Regression on recent trend)
+const generateForecast = (data: any[], key: string, pointsToForecast = 6) => {
+    const validData = data.filter(d => d.sma !== undefined);
+    if (validData.length < 5) return [];
+
+    // Use last 5 points to capture the *immediate* trend after the step
+    const n = Math.min(validData.length, 5); 
+    const subset = validData.slice(validData.length - n);
+    
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    subset.forEach((p, i) => {
+        sumX += i;
+        sumY += p.sma;
+        sumXY += i * p.sma;
+        sumXX += i * i;
+    });
+
+    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+    const intercept = (sumY - slope * sumX) / n;
+
+    const lastPoint = validData[validData.length - 1];
+    const lastTime = new Date(lastPoint.time).getTime();
+    
+    // Estimate interval from last 2 points
+    const prevTime = new Date(validData[validData.length - 2].time).getTime();
+    const interval = lastTime - prevTime;
+
+    const forecast = [];
+    
+    // Anchor point
+    forecast.push({
+        time: lastPoint.time,
+        forecast: lastPoint.sma
+    });
+
+    for(let i = 1; i <= pointsToForecast; i++) {
+        // Damping factor: reduce slope slightly over time to simulate saturation
+        const damping = Math.max(0.5, 1 - (i * 0.1)); 
+        const val = (slope * damping) * (n - 1 + i) + intercept;
+        
+        forecast.push({
+            time: new Date(lastTime + interval * i).toISOString(),
+            forecast: Math.max(0, val), 
+            isForecast: true
+        });
+    }
+    return forecast;
 };
 
 // Modified: Unified icon for all sensors
@@ -80,6 +189,148 @@ const SensorIcon = () => {
         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-gray-100 to-gray-400 flex items-center justify-center shadow-md border border-gray-300 flex-shrink-0">
             <div className="w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center border-2 border-gray-600 shadow-inner">
                 <Radio size={14} className="text-white" strokeWidth={2.5} />
+            </div>
+        </div>
+    );
+};
+
+// --- Chart Component for Analysis Back Face ---
+const AnalysisChart = ({ data, inflectionTime, forecastStartTime, color, isDark }: any) => {
+    return (
+        <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                <defs>
+                    <linearGradient id="forecastGradient" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stopColor={color} stopOpacity={0.05}/>
+                        <stop offset="100%" stopColor={color} stopOpacity={0.15}/>
+                    </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#333' : '#e2e8f0'} opacity={0.5} />
+                <XAxis dataKey="time" hide />
+                <YAxis tick={{fontSize: 9, fill: isDark ? '#666' : '#64748b'}} axisLine={false} tickLine={false} width={25} />
+                <Tooltip 
+                    cursor={{stroke: color, strokeWidth: 1, strokeDasharray: '3 3'}}
+                    contentStyle={{ backgroundColor: isDark ? '#000' : '#fff', borderColor: isDark ? '#333' : '#e2e8f0', fontSize: '12px', color: isDark ? '#f3f4f6' : '#1e293b' }}
+                    labelFormatter={() => '智能分析'}
+                    formatter={(val: number, name: string) => [val.toFixed(2), name === 'original' ? '原始值' : (name === 'sma' ? '移动平均' : '趋势预测')]}
+                />
+                
+                {/* Visual Zones */}
+                {forecastStartTime && (
+                    <ReferenceArea x1={forecastStartTime} strokeOpacity={0} fill="url(#forecastGradient)" label={{ value: '趋势预测', position: 'insideTopRight', fill: color, fontSize: 10, opacity: 0.8 }} />
+                )}
+                
+                {/* Inflection Point - Showing the >6dB Jump */}
+                {inflectionTime && (
+                     <ReferenceLine x={inflectionTime} stroke="#ef4444" strokeDasharray="3 3" label={{ position: 'insideTopLeft', value: '突变 >6dB', fill: '#ef4444', fontSize: 10, fontWeight: 'bold' }} />
+                )}
+
+                {/* Lines */}
+                {/* Original Data (Faint) */}
+                <Line type="monotone" dataKey="original" stroke={isDark ? '#555' : '#ccc'} dot={false} strokeWidth={1} strokeOpacity={0.4} activeDot={false} isAnimationActive={false} />
+                {/* SMA (Bold) */}
+                <Line type="monotone" dataKey="sma" stroke={color} dot={false} strokeWidth={2.5} name="移动平均" animationDuration={1000} />
+                {/* Forecast (Dashed) */}
+                <Line type="monotone" dataKey="forecast" stroke={color} strokeDasharray="4 4" dot={false} strokeWidth={2.5} name="趋势预测" animationDuration={1000} />
+                
+            </ComposedChart>
+        </ResponsiveContainer>
+    )
+};
+
+// --- Helper Component for 3D Flip Card ---
+const FlippableCard = ({ 
+    isDark, 
+    isFlipped, 
+    onFlip, 
+    title, 
+    backTitle, // Added prop for back title
+    icon: Icon, 
+    iconColorClass,
+    children,
+    backContent 
+}: { 
+    isDark: boolean;
+    isFlipped: boolean; 
+    onFlip: () => void; 
+    title: string; 
+    backTitle?: string;
+    icon: any; 
+    iconColorClass: string;
+    children?: React.ReactNode; 
+    backContent?: React.ReactNode;
+}) => {
+    return (
+        <div className="relative w-full h-[170px]" style={{ perspective: '1000px' }}>
+            <div 
+                className="w-full h-full relative transition-transform duration-700" 
+                style={{ 
+                    transformStyle: 'preserve-3d', 
+                    transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' 
+                }}
+            >
+                {/* Front Face */}
+                <div 
+                    className={`absolute inset-0 rounded-2xl border shadow-sm transition-colors overflow-hidden
+                        ${isDark ? 'bg-[#111111] border-white/10' : 'bg-white border-gray-200'}
+                    `}
+                    style={{ backfaceVisibility: 'hidden' }}
+                >
+                    <div className="p-3 h-full flex flex-col group relative">
+                        {/* Header */}
+                        <div className="flex items-center gap-2 mb-2 px-1 pointer-events-none">
+                            <Icon size={16} className={iconColorClass} fillOpacity={0.2} />
+                            <span className={`font-bold text-xs ${isDark ? 'text-white' : 'text-slate-800'}`}>{title}</span>
+                        </div>
+                        
+                        {/* Flip Button */}
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); onFlip(); }}
+                            className={`absolute top-2 right-2 p-1.5 rounded-full z-20 transition-all
+                                ${isDark ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-gray-100 text-slate-500'}
+                            `}
+                            title="智能分析"
+                        >
+                            <TrendingUp size={14} />
+                        </button>
+
+                        {/* Content */}
+                        <div className="flex-1 w-full min-h-0">
+                            {children}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Back Face */}
+                <div 
+                    className={`absolute inset-0 rounded-2xl border shadow-sm transition-colors overflow-hidden
+                        ${isDark ? 'bg-[#111111] border-white/10' : 'bg-white border-gray-200'}
+                    `}
+                    style={{ backfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}
+                >
+                    <div className="p-3 h-full flex flex-col group relative">
+                        {/* Header Back */}
+                        <div className="flex items-center gap-2 mb-2 px-1 pointer-events-none">
+                            <TrendingUp size={16} className={iconColorClass} />
+                            <span className={`font-bold text-xs ${isDark ? 'text-white' : 'text-slate-800'}`}>{backTitle || '智能趋势分析'}</span>
+                        </div>
+
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); onFlip(); }}
+                            className={`absolute top-2 right-2 p-1.5 rounded-full z-20 transition-colors
+                                ${isDark ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-gray-100 text-slate-500'}
+                            `}
+                            title="返回图表"
+                        >
+                            <RotateCw size={14} />
+                        </button>
+                        
+                        {/* Back Content */}
+                        <div className="flex-1 w-full min-h-0">
+                            {backContent || <span className={`text-sm font-bold opacity-30 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>无分析数据</span>}
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     );
@@ -94,6 +345,9 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
   const [activeTab, setActiveTab] = useState<TabType>('electrical');
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [selectedSensorId, setSelectedSensorId] = useState<string | null>(null);
+
+  // Flip State
+  const [flippedCards, setFlippedCards] = useState({ amp: false, freq: false });
 
   // Single select channel
   const [selectedChannel, setSelectedChannel] = useState<string>('UHF');
@@ -136,6 +390,49 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
     setChartData(generateData(timeRange));
   }, [timeRange, selectedSensorId]);
 
+  // Calculate Analysis Data Memoized
+  const getAnalysisData = (dataKey: keyof ChartDataPoint) => {
+      const smaData = calculateSMA(chartData, dataKey as string, 5); // Window size 5
+      const inflectionTime = findInflectionPoint(smaData);
+      const forecastPoints = generateForecast(smaData, 'sma');
+      
+      const history = smaData.map(d => ({
+          time: d.time,
+          original: d[dataKey],
+          sma: d.sma
+      }));
+      
+      const forecast = forecastPoints.slice(1).map(d => ({
+          time: d.time,
+          forecast: d.forecast
+      }));
+
+      // Merge forecast anchor point for visual continuity
+      if (history.length > 0 && forecastPoints.length > 0) {
+          history[history.length - 1] = {
+              ...history[history.length - 1],
+              forecast: history[history.length - 1].sma // Connect forecast line start to SMA end
+          } as any;
+      }
+
+      return {
+          fullData: [...history, ...forecast],
+          inflectionTime,
+          forecastStartTime: forecastPoints[0]?.time
+      };
+  };
+
+  const ampAnalysis = useMemo(() => {
+      const key = selectedChannel === 'UHF' ? 'uhf_amp' : (selectedChannel === 'TEV' ? 'tev_amp' : 'ae_amp');
+      return getAnalysisData(key);
+  }, [chartData, selectedChannel]);
+
+  const freqAnalysis = useMemo(() => {
+      const key = selectedChannel === 'UHF' ? 'uhf_freq' : (selectedChannel === 'TEV' ? 'tev_freq' : 'ae_freq');
+      return getAnalysisData(key);
+  }, [chartData, selectedChannel]);
+
+
   // Robust click handler that can deal with both Chart state and direct payload
   const handleChartClick = (data: any, event?: any) => {
       if (!onChartClick) return;
@@ -154,6 +451,10 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
       if (data && (data.uhf_amp !== undefined || data.time !== undefined)) {
           onChartClick(data as ChartDataPoint, info);
       }
+  };
+
+  const toggleFlip = (key: 'amp' | 'freq') => {
+      setFlippedCards(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
   const currentChannelConfig = CHANNEL_CONFIG[selectedChannel] || CHANNEL_CONFIG.UHF;
@@ -179,11 +480,13 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
           handleChartClick({ payload });
       };
 
-      // Default Dot (No color coding for alarms as per request)
+      // Determine color: Fixed Purple for Frequency, otherwise Channel color
+      const dotColor = isFreq ? FREQ_COLOR : currentChannelConfig.color;
+
       return (
           <circle 
             cx={cx} cy={cy} r={3} fill={isDark ? '#111' : '#fff'} 
-            stroke={currentChannelConfig.color} strokeWidth={1.5}
+            stroke={dotColor} strokeWidth={1.5}
             onClick={handleDotClick}
             style={{ cursor: 'pointer' }}
           />
@@ -277,63 +580,83 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
                      </div>
                 </div>
 
-                {/* Chart 1: Amplitude */}
-                <div 
-                    className={`p-3 rounded-2xl border shadow-sm transition-colors ${isDark ? 'bg-[#111111] border-white/10' : 'bg-white border-gray-200'} hover:border-blue-400 cursor-pointer group`}
+                {/* Chart 1: Amplitude (Flippable) */}
+                <FlippableCard 
+                    isDark={isDark}
+                    isFlipped={flippedCards.amp}
+                    onFlip={() => toggleFlip('amp')}
+                    title="局放幅值趋势 (dBmV)"
+                    backTitle="局放幅值智能分析"
+                    icon={BarChart2}
+                    iconColorClass={selectedChannel === 'AE' ? 'text-indigo-500' : (selectedChannel === 'TEV' ? 'text-purple-500' : 'text-blue-500')}
+                    backContent={
+                        <AnalysisChart 
+                            data={ampAnalysis.fullData} 
+                            inflectionTime={ampAnalysis.inflectionTime}
+                            forecastStartTime={ampAnalysis.forecastStartTime}
+                            color={currentChannelConfig.color}
+                            isDark={isDark}
+                        />
+                    }
                 >
-                    <div className="flex items-center gap-2 mb-2 pointer-events-none px-1">
-                        <BarChart2 size={16} className={selectedChannel === 'AE' ? 'text-indigo-500' : (selectedChannel === 'TEV' ? 'text-purple-500' : 'text-blue-500')} fillOpacity={0.2} />
-                        <span className={`font-bold text-xs ${isDark ? 'text-white' : 'text-slate-800'}`}>局放幅值趋势 (dBmV)</span>
-                    </div>
-                    <div className="h-32 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={chartData} onClick={handleChartClick} margin={{ top: 5, right: 35, left: 0, bottom: 0 }}>
-                                <defs>
-                                    <linearGradient id="colorAmp" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor={currentChannelConfig.color} stopOpacity={0.3}/>
-                                        <stop offset="95%" stopColor={currentChannelConfig.color} stopOpacity={0}/>
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#333' : '#e2e8f0'} opacity={0.5} />
-                                <XAxis dataKey="time" hide />
-                                <YAxis tick={{fontSize: 9, fill: isDark ? '#666' : '#64748b'}} axisLine={false} tickLine={false} width={25} />
-                                <Tooltip cursor={{stroke: '#38BDF8', strokeWidth: 1}} contentStyle={{ backgroundColor: isDark ? '#000' : '#fff', borderColor: isDark ? '#333' : '#e2e8f0', fontSize: '12px', color: isDark ? '#f3f4f6' : '#1e293b' }} labelFormatter={() => ''} />
-                                
-                                {visibleLevels.includes('l1') && <ReferenceLine y={currentThresholds.amp.l1} stroke="#eab308" strokeDasharray="3 3" label={{ position: 'right', value: '一级', fill: '#eab308', fontSize: 10 }} />}
-                                {visibleLevels.includes('l2') && <ReferenceLine y={currentThresholds.amp.l2} stroke="#f97316" strokeDasharray="3 3" label={{ position: 'right', value: '二级', fill: '#f97316', fontSize: 10 }} />}
-                                {visibleLevels.includes('l3') && <ReferenceLine y={currentThresholds.amp.l3} stroke="#ef4444" strokeDasharray="3 3" label={{ position: 'right', value: '三级', fill: '#ef4444', fontSize: 10 }} />}
-                                
-                                <Area 
-                                    type="monotone" 
-                                    dataKey={selectedChannel === 'UHF' ? 'uhf_amp' : (selectedChannel === 'TEV' ? 'tev_amp' : 'ae_amp')}
-                                    stroke={currentChannelConfig.color}
-                                    strokeWidth={2} 
-                                    fill="url(#colorAmp)"
-                                    dot={(props) => renderCustomDot(props, false)}
-                                    activeDot={{ r: 6, strokeWidth: 0, cursor: 'pointer', onClick: (_: any, p: any) => handleChartClick({ payload: p.payload }) }}
-                                    animationDuration={500}
-                                    name="幅值"
-                                />
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    </div>
-                </div>
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={chartData} onClick={handleChartClick} margin={{ top: 5, right: 35, left: 0, bottom: 0 }}>
+                            <defs>
+                                <linearGradient id="colorAmp" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor={currentChannelConfig.color} stopOpacity={0.3}/>
+                                    <stop offset="95%" stopColor={currentChannelConfig.color} stopOpacity={0}/>
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#333' : '#e2e8f0'} opacity={0.5} />
+                            <XAxis dataKey="time" hide />
+                            <YAxis tick={{fontSize: 9, fill: isDark ? '#666' : '#64748b'}} axisLine={false} tickLine={false} width={25} />
+                            <Tooltip cursor={{stroke: '#38BDF8', strokeWidth: 1}} contentStyle={{ backgroundColor: isDark ? '#000' : '#fff', borderColor: isDark ? '#333' : '#e2e8f0', fontSize: '12px', color: isDark ? '#f3f4f6' : '#1e293b' }} labelFormatter={() => ''} />
+                            
+                            {visibleLevels.includes('l1') && <ReferenceLine y={currentThresholds.amp.l1} stroke="#eab308" strokeDasharray="3 3" label={{ position: 'right', value: '一级', fill: '#eab308', fontSize: 10 }} />}
+                            {visibleLevels.includes('l2') && <ReferenceLine y={currentThresholds.amp.l2} stroke="#f97316" strokeDasharray="3 3" label={{ position: 'right', value: '二级', fill: '#f97316', fontSize: 10 }} />}
+                            {visibleLevels.includes('l3') && <ReferenceLine y={currentThresholds.amp.l3} stroke="#ef4444" strokeDasharray="3 3" label={{ position: 'right', value: '三级', fill: '#ef4444', fontSize: 10 }} />}
+                            
+                            <Area 
+                                type="monotone" 
+                                dataKey={selectedChannel === 'UHF' ? 'uhf_amp' : (selectedChannel === 'TEV' ? 'tev_amp' : 'ae_amp')}
+                                stroke={currentChannelConfig.color}
+                                strokeWidth={2} 
+                                fill="url(#colorAmp)"
+                                dot={(props) => renderCustomDot(props, false)}
+                                activeDot={{ r: 6, strokeWidth: 0, cursor: 'pointer', onClick: (_: any, p: any) => handleChartClick({ payload: p.payload }) }}
+                                animationDuration={500}
+                                name="幅值"
+                            />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                </FlippableCard>
 
-                {/* Chart 2: Frequency */}
-                <div 
-                    className={`p-3 rounded-2xl border shadow-sm transition-colors ${isDark ? 'bg-[#111111] border-white/10' : 'bg-white border-gray-200'} hover:border-blue-400 cursor-pointer group`}
-                >
-                    <div className="flex items-center gap-2 mb-2 pointer-events-none px-1">
-                        <Waves size={16} className={selectedChannel === 'AE' ? 'text-indigo-500' : (selectedChannel === 'TEV' ? 'text-purple-500' : 'text-blue-500')} />
-                        <span className={`font-bold text-xs ${isDark ? 'text-white' : 'text-slate-800'}`}>局放频次趋势 (次/秒)</span>
-                    </div>
-                    <div className="h-32 w-full">
+                {/* Chart 2: Frequency (Flippable) */}
+                <div className="mt-4">
+                    <FlippableCard 
+                        isDark={isDark}
+                        isFlipped={flippedCards.freq}
+                        onFlip={() => toggleFlip('freq')}
+                        title="局放频次趋势 (次/秒)"
+                        backTitle="局放频次智能分析"
+                        icon={Waves}
+                        iconColorClass="text-purple-500" // Fixed Purple
+                        backContent={
+                            <AnalysisChart 
+                                data={freqAnalysis.fullData} 
+                                inflectionTime={null} 
+                                forecastStartTime={freqAnalysis.forecastStartTime}
+                                color={FREQ_COLOR} // Fixed Purple
+                                isDark={isDark}
+                            />
+                        }
+                    >
                         <ResponsiveContainer width="100%" height="100%">
                             <AreaChart data={chartData} onClick={handleChartClick} margin={{ top: 5, right: 35, left: 0, bottom: 0 }}>
                                 <defs>
                                     <linearGradient id="colorFreq" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor={currentChannelConfig.color} stopOpacity={0.3}/>
-                                        <stop offset="95%" stopColor={currentChannelConfig.color} stopOpacity={0}/>
+                                        <stop offset="5%" stopColor={FREQ_COLOR} stopOpacity={0.3}/>
+                                        <stop offset="95%" stopColor={FREQ_COLOR} stopOpacity={0}/>
                                     </linearGradient>
                                 </defs>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#333' : '#e2e8f0'} opacity={0.5} />
@@ -348,7 +671,7 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
                                 <Area 
                                     type="monotone" 
                                     dataKey={selectedChannel === 'UHF' ? 'uhf_freq' : (selectedChannel === 'TEV' ? 'tev_freq' : 'ae_freq')}
-                                    stroke={currentChannelConfig.color}
+                                    stroke={FREQ_COLOR} // Fixed Purple
                                     strokeWidth={2} 
                                     fill="url(#colorFreq)"
                                     dot={(props) => renderCustomDot(props, true)}
@@ -358,7 +681,7 @@ const TrendAnalysis: React.FC<TrendAnalysisProps> = ({
                                 />
                             </AreaChart>
                         </ResponsiveContainer>
-                    </div>
+                    </FlippableCard>
                 </div>
             </>
           )}
